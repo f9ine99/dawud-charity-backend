@@ -1,537 +1,247 @@
 # Dawud Charity Hub - Backend API
 
-A secure, production-ready FastAPI backend for managing donation submissions with real-time admin dashboard updates.
+FastAPI backend for donation management with real-time admin dashboard.
 
-## 📋 Table of Contents
+## Overview
 
-- [Overview](#overview)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [API Endpoints](#api-endpoints)
-- [Database Models](#database-models)
-- [Security Features](#security-features)
-- [Project Structure](#project-structure)
-- [Running the Application](#running-the-application)
-- [Development](#development)
-- [Deployment](#deployment)
+Secure donation submission system where donors submit confirmations with proof images. Administrators verify, manage, and export donation data through a real-time dashboard.
 
-## 🎯 Overview
+## Features
 
-Dawud Charity Hub Backend is a secure donation management system that allows donors to submit donation confirmations with proof images, while administrators can verify, manage, and export donation data through a real-time dashboard.
+**Public**
+- Donation submission with transaction reference
+- Optional proof image upload (JPG/PNG, max 5MB)
+- Multiple bank support
 
-### Key Capabilities
+**Admin**
+- Session-based authentication
+- Real-time dashboard with WebSocket updates
+- Donation verification workflow
+- Search, filter, and export (CSV/Excel)
+- Dashboard statistics
 
-- **Public Donation Submission**: Secure form submission with image upload
-- **Admin Dashboard**: Real-time updates via WebSocket connections
-- **Verification System**: Admin verification workflow for donations
-- **Data Export**: CSV and Excel export functionality
-- **Security First**: Multiple layers of security middleware and rate limiting
+**Security**
+- Rate limiting, security headers, request validation
+- SQL injection and XSS protection
+- Secure file uploads with UUID filenames
+- Bcrypt password hashing (12 rounds)
+- JWT tokens for WebSocket authentication
 
-## ✨ Features
+## Tech Stack
 
-### Public Features
-- ✅ Donation submission with transaction reference
-- ✅ Optional proof image upload (JPG/PNG, max 5MB)
-- ✅ Multiple bank support
-- ✅ Donor contact information (email/phone)
-- ✅ Custom donation messages
+- FastAPI 0.104.1
+- SQLite (SQLAlchemy ORM)
+- Session + JWT authentication
+- bcrypt, slowapi, pandas, openpyxl
+- Uvicorn
 
-### Admin Features
-- ✅ Session-based authentication
-- ✅ Real-time dashboard with WebSocket updates
-- ✅ Donation verification/unverification
-- ✅ Search and filter donations
-- ✅ Export to CSV/Excel
-- ✅ Dashboard statistics
-- ✅ Password change functionality
-- ✅ Image viewing for proof submissions
-
-### Security Features
-- ✅ Rate limiting on sensitive endpoints
-- ✅ Security headers (CSP, XSS protection, etc.)
-- ✅ Request validation middleware
-- ✅ SQL injection and XSS protection
-- ✅ Secure file upload handling
-- ✅ Bcrypt password hashing
-- ✅ JWT tokens for WebSocket authentication
-- ✅ Optional IP whitelisting
-
-## 🛠 Tech Stack
-
-- **Framework**: FastAPI 0.104.1
-- **Database**: SQLite (SQLAlchemy ORM)
-- **Authentication**: Session-based + JWT tokens
-- **Password Hashing**: bcrypt
-- **File Handling**: aiofiles, PIL/Pillow
-- **Real-time**: WebSocket support
-- **Rate Limiting**: slowapi
-- **Data Export**: pandas, openpyxl
-- **Server**: Uvicorn
-
-## 📦 Installation
+## Installation
 
 ### Prerequisites
+- Python 3.8+
+- pip
 
-- Python 3.8 or higher
-- pip (Python package manager)
-
-### Step 1: Clone the Repository
-
-```bash
-cd dawud-charity-backend
-```
-
-### Step 2: Create Virtual Environment
+### Setup
 
 ```bash
+# 1. Create virtual environment
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-### Step 3: Install Dependencies
-
-```bash
+# 2. Install dependencies
 pip install -r requirements.txt
-```
 
-### Step 4: Configure Environment Variables
-
-```bash
+# 3. Configure environment
 cp env.example .env
+# Edit .env with your settings
+
+# 4. Run application
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Edit `.env` file with your configuration (see [Configuration](#configuration) section).
+Database and default admin user (`admin/admin`) are created automatically on first run.
 
-### Step 5: Initialize Database
+**Important**: Change default admin password immediately.
 
-The database will be automatically created on first run. The application will:
-- Create the `data/` directory
-- Initialize SQLite database at `data/donations.db`
-- Create all necessary tables
-- Create default admin user (username: `admin`, password: `admin`)
+## Configuration
 
-**⚠️ Important**: Change the default admin password immediately after first login!
-
-## ⚙️ Configuration
-
-### Environment Variables
-
-Create a `.env` file in the root directory with the following variables:
+Create `.env` file:
 
 ```env
-# Security - Generate a secure random key for production
-SECRET_KEY=your-super-secret-jwt-key-change-this-in-production
+# Required
+SECRET_KEY=your-secure-random-key-here
+ALLOWED_ORIGINS=https://yourdomain.com,http://localhost:3000
 
-# CORS - Allowed origins for frontend (comma-separated)
-ALLOWED_ORIGINS=https://kedi.furi-cadaster.com,https://www.kedi.furi-cadaster.com,http://localhost:3000
-
-# Rate Limiting (Optional)
-MAX_DONATION_SUBMISSIONS_PER_MINUTE=10
-MAX_LOGIN_ATTEMPTS_PER_MINUTE=5
-
-# File Upload Settings
-MAX_FILE_SIZE_MB=5
-ALLOWED_FILE_TYPES=image/jpeg,image/jpg,image/png
-
-# Session Settings
+# Optional
 ACCESS_TOKEN_EXPIRE_MINUTES=30
-
-# Optional: IP Whitelist for Admin Endpoints
 ADMIN_IP_WHITELIST=127.0.0.1,192.168.1.100
 ```
 
-### Generating a Secure Secret Key
-
+Generate secure key:
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-## 📡 API Endpoints
+## API Endpoints
 
-### Public Endpoints
+### Public
 
-#### Submit Donation
-```http
-POST /api/submit-donation
-Content-Type: multipart/form-data
+**POST /api/submit-donation**
+- Content-Type: `multipart/form-data`
+- Parameters: `donor_name`, `donor_contact`, `bank_used`, `amount_donated`, `transaction_reference` (optional), `message` (optional), `proof_image` (optional)
+- Rate limit: 10/minute per IP
 
-Parameters:
-- transaction_reference (optional): Transaction reference number
-- donor_name (required): Donor's full name (2-100 characters)
-- donor_contact (required): Email or phone number
-- bank_used (required): Bank name
-- amount_donated (required): Amount (e.g., "100 ETB", "1,000.50")
-- message (optional): Donation message
-- proof_image (optional): JPG/PNG image file (max 5MB)
+**GET /health**
+- Health check endpoint
 
-Response:
-{
-  "success": true,
-  "transaction_reference": "...",
-  "message": "Donation confirmation submitted successfully"
-}
-```
+### Admin (Requires Authentication)
 
-**Rate Limit**: 10 requests per minute per IP
+**POST /api/admin/login**
+- Body: `{"username": "admin", "password": "password"}`
+- Rate limit: 5/minute per IP
 
-### Admin Endpoints
+**POST /api/admin/logout**
 
-All admin endpoints require authentication via session cookie.
+**PUT /api/admin/change-password**
+- Body: `{"current_password": "...", "new_password": "..."}`
 
-#### Login
-```http
-POST /api/admin/login
-Content-Type: application/json
+**GET /api/admin/dashboard-stats**
+- Returns: total submissions, verified count, pending count, total amount
 
-Body:
-{
-  "username": "admin",
-  "password": "password"
-}
+**GET /api/admin/submissions**
+- Query params: `skip`, `limit`, `verified_only`, `search`
+- Returns: Array of donation submissions
 
-Response:
-{
-  "success": true,
-  "message": "Login successful",
-  "redirect": "/admin/dashboard"
-}
-```
+**GET /api/admin/submissions/{id}**
+- Returns: Single submission
 
-**Rate Limit**: 5 requests per minute per IP
+**PUT /api/admin/submissions/{id}/verify**
+- Body: `{"is_verified": true}`
 
-#### Logout
-```http
-POST /api/admin/logout
+**DELETE /api/admin/delete/{id}**
 
-Response:
-{
-  "success": true,
-  "message": "Logged out successfully"
-}
-```
+**GET /api/admin/export**
+- Query params: `format` (csv/excel), `verified_only`
+- Returns: File download
 
-#### Change Password
-```http
-PUT /api/admin/change-password
-Content-Type: application/json
+**GET /api/admin/banks**
+- Returns: List of unique bank names
 
-Body:
-{
-  "current_password": "old_password",
-  "new_password": "new_password"
-}
+**GET /api/admin/images/{image_path}**
+- Returns: Image file
 
-Response:
-{
-  "success": true,
-  "message": "Password changed successfully"
-}
-```
+### WebSocket
 
-#### Dashboard Statistics
-```http
-GET /api/admin/dashboard-stats
+**WS /ws/admin?token={jwt_token}**
+- Real-time updates for admin dashboard
+- Message types: `new_donation`, `donation_verified`, `stats_update`, `connection_established`
+- Supports ping/pong for keep-alive
 
-Response:
-{
-  "total_submissions": 150,
-  "verified_count": 120,
-  "pending_count": 30,
-  "total_amount": 125000.50
-}
-```
-
-#### Get Submissions
-```http
-GET /api/admin/submissions?skip=0&limit=100&verified_only=false&search=john
-
-Query Parameters:
-- skip (default: 0): Number of records to skip
-- limit (default: 100, max: 999999): Number of records to return
-- verified_only (default: false): Filter verified submissions only
-- search (optional): Search in donor name, transaction reference, or contact
-
-Response: Array of donation submission objects
-```
-
-#### Get Submission by ID
-```http
-GET /api/admin/submissions/{submission_id}
-
-Response: Single donation submission object
-```
-
-#### Verify/Unverify Submission
-```http
-PUT /api/admin/submissions/{submission_id}/verify
-Content-Type: application/json
-
-Body:
-{
-  "is_verified": true
-}
-
-Response:
-{
-  "success": true,
-  "message": "Submission verified successfully"
-}
-```
-
-#### Delete Submission
-```http
-DELETE /api/admin/delete/{submission_id}
-
-Response:
-{
-  "success": true,
-  "message": "Submission deleted successfully"
-}
-```
-
-#### Export Submissions
-```http
-GET /api/admin/export?format=csv&verified_only=false
-
-Query Parameters:
-- format: "csv" or "excel" (default: "csv")
-- verified_only (default: false): Export only verified submissions
-
-Response: File download (CSV or Excel)
-```
-
-#### Get Banks List
-```http
-GET /api/admin/banks
-
-Response: ["Bank Name 1", "Bank Name 2", ...]
-```
-
-#### Get Submission Image
-```http
-GET /api/admin/images/{image_path}
-
-Example: /api/admin/images/donations/filename.jpg
-
-Response: Image file (JPEG/PNG)
-```
-
-### WebSocket Endpoint
-
-#### Real-time Admin Updates
-```javascript
-// Connect to WebSocket
-const ws = new WebSocket(`ws://localhost:8000/ws/admin?token=${jwt_token}`);
-
-// Message Types:
-// - connection_established: Initial connection confirmation
-// - new_donation: New donation submitted
-// - donation_verified: Donation verification status changed
-// - stats_update: Dashboard statistics updated
-// - pong: Response to ping message
-
-// Send ping for keep-alive
-ws.send(JSON.stringify({ type: "ping" }));
-
-// Request current stats
-ws.send(JSON.stringify({ type: "request_stats" }));
-```
-
-### Health Check
-
-```http
-GET /health
-
-Response:
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T00:00:00",
-  "websocket_connections": 2,
-  "connected_admins": ["admin"]
-}
-```
-
-## 🗄 Database Models
+## Database Models
 
 ### DonationSubmission
-
 ```python
-{
-  "id": int (Primary Key),
-  "transaction_reference": str (Optional, Unique),
-  "donor_name": str (Required),
-  "donor_contact": str (Required),  # Email or phone
-  "bank_used": str (Required),
-  "amount_donated": str (Required),  # e.g., "100 ETB"
-  "message": str (Optional),
-  "proof_image_path": str (Optional),  # Relative path
-  "submitted_at": datetime (Auto-generated),
-  "is_verified": bool (Default: False),
-  "verified_at": datetime (Optional),
-  "verified_by": str (Optional)  # Admin username
-}
+id: int (PK)
+transaction_reference: str (optional, unique)
+donor_name: str
+donor_contact: str  # Email or phone
+bank_used: str
+amount_donated: str  # e.g., "100 ETB"
+message: str (optional)
+proof_image_path: str (optional)
+submitted_at: datetime
+is_verified: bool (default: False)
+verified_at: datetime (optional)
+verified_by: str (optional)  # Admin username
 ```
 
 ### Admin
-
 ```python
-{
-  "id": int (Primary Key),
-  "username": str (Required, Unique),
-  "email": str (Required, Unique),
-  "hashed_password": str (Required),
-  "is_active": bool (Default: True),
-  "created_at": datetime (Auto-generated)
-}
+id: int (PK)
+username: str (unique)
+email: str (unique)
+hashed_password: str
+is_active: bool (default: True)
+created_at: datetime
 ```
 
-## 🔒 Security Features
+## Security
 
-### 1. Security Headers Middleware
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY`
-- `X-XSS-Protection: 1; mode=block`
-- `Strict-Transport-Security`
-- `Content-Security-Policy`
-- `Referrer-Policy`
-- `Permissions-Policy`
+1. **Security Headers**: CSP, XSS protection, frame options, HSTS
+2. **Request Validation**: SQL injection and XSS pattern detection, 5MB size limit
+3. **Rate Limiting**: Configurable per endpoint
+4. **File Upload**: Type validation, size limits, UUID filenames, PIL content verification
+5. **Authentication**: Bcrypt hashing, session management, JWT for WebSocket
+6. **IP Whitelisting**: Optional admin endpoint restriction
 
-### 2. Request Validation Middleware
-- SQL injection pattern detection
-- XSS pattern detection
-- Request size validation (5MB limit)
-- Input sanitization
-
-### 3. Rate Limiting
-- Donation submissions: 10/minute per IP
-- Login attempts: 5/minute per IP
-- Configurable via environment variables
-
-### 4. File Upload Security
-- File type validation (JPG/PNG only)
-- File size limits (5MB max)
-- Filename sanitization
-- UUID-based secure filenames
-- Image content validation (PIL verification)
-- Path traversal protection
-
-### 5. Authentication & Authorization
-- Bcrypt password hashing (12 rounds)
-- Session-based authentication for admin
-- JWT tokens for WebSocket connections
-- Password strength requirements (min 8 characters)
-
-### 6. Optional IP Whitelisting
-- Configure `ADMIN_IP_WHITELIST` in `.env` to restrict admin access
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 dawud-charity-backend/
-├── main.py                 # FastAPI application and routes
-├── models.py               # SQLAlchemy database models
-├── schemas.py              # Pydantic validation schemas
-├── database.py             # Database configuration and session
-├── auth.py                 # Authentication utilities (JWT, password hashing)
-├── security_middleware.py  # Security middleware (headers, validation, rate limiting)
-├── file_utils.py           # Secure file upload handling
-├── websocket_manager.py    # WebSocket connection management
-├── requirements.txt        # Python dependencies
-├── env.example             # Environment variables template
-├── .env                    # Environment variables (create from env.example)
+├── main.py                 # FastAPI app and routes
+├── models.py               # SQLAlchemy models
+├── schemas.py              # Pydantic schemas
+├── database.py             # DB configuration
+├── auth.py                 # JWT and password hashing
+├── security_middleware.py  # Security middleware
+├── file_utils.py           # File upload handling
+├── websocket_manager.py    # WebSocket manager
+├── requirements.txt
+├── .env                    # Environment variables
 ├── data/
-│   └── donations.db       # SQLite database (auto-created)
-├── uploads/
-│   └── donations/         # Uploaded proof images
-├── temp/                   # Temporary file storage
-└── templates/
-    ├── login.html          # Admin login page
-    └── dashboard.html      # Admin dashboard
+│   └── donations.db       # SQLite database
+├── uploads/donations/     # Uploaded images
+└── templates/             # Admin HTML pages
 ```
 
-## 🚀 Running the Application
+## Running
 
-### Development Mode
-
+**Development:**
 ```bash
-# Activate virtual environment
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Run with auto-reload
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Production Mode
-
+**Production:**
 ```bash
-# Run with production settings
 uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
-### Using Python Directly
-
+**Direct:**
 ```bash
 python main.py
 ```
 
-The application will be available at:
-- **API**: `http://localhost:8000`
-- **Admin Login**: `http://localhost:8000/admin`
-- **Admin Dashboard**: `http://localhost:8000/admin/dashboard`
-- **API Docs** (disabled in production): `http://localhost:8000/docs`
+Access:
+- API: `http://localhost:8000`
+- Admin: `http://localhost:8000/admin`
+- Dashboard: `http://localhost:8000/admin/dashboard`
 
-## 💻 Development
+## Development
 
-### Default Admin Credentials
+### Default Admin
+- Username: `admin`
+- Password: `admin`
+- Change immediately in production
 
-On first run, a default admin user is created:
-- **Username**: `admin`
-- **Password**: `admin`
-
-**⚠️ Change this immediately in production!**
-
-### Creating Additional Admin Users
-
-You can create additional admin users by directly inserting into the database or by creating a management script. Example:
-
+### Create Admin User
 ```python
 from database import SessionLocal
 from models import Admin
 from auth import get_password_hash
 
 db = SessionLocal()
-new_admin = Admin(
+admin = Admin(
     username="newadmin",
-    email="newadmin@example.com",
-    hashed_password=get_password_hash("secure_password"),
+    email="admin@example.com",
+    hashed_password=get_password_hash("password"),
     is_active=True
 )
-db.add(new_admin)
+db.add(admin)
 db.commit()
 db.close()
 ```
 
-### Database Migrations
-
-The application uses SQLAlchemy with automatic table creation. For production, consider using Alembic for migrations:
-
-```bash
-# Initialize Alembic (if not already done)
-alembic init alembic
-
-# Create a migration
-alembic revision --autogenerate -m "Description"
-
-# Apply migrations
-alembic upgrade head
-```
-
 ### Testing
-
-Test endpoints using curl or any HTTP client:
-
 ```bash
 # Health check
 curl http://localhost:8000/health
@@ -540,53 +250,41 @@ curl http://localhost:8000/health
 curl -X POST http://localhost:8000/api/submit-donation \
   -F "donor_name=John Doe" \
   -F "donor_contact=john@example.com" \
-  -F "bank_used=Commercial Bank" \
-  -F "amount_donated=100 ETB" \
-  -F "proof_image=@/path/to/image.jpg"
+  -F "bank_used=Bank Name" \
+  -F "amount_donated=100 ETB"
 ```
 
-## 🚢 Deployment
+## Deployment
 
-### Production Checklist
-
-- [ ] Change `SECRET_KEY` to a secure random value
-- [ ] Update `ALLOWED_ORIGINS` with production domain(s)
+### Checklist
+- [ ] Set secure `SECRET_KEY`
+- [ ] Update `ALLOWED_ORIGINS` with production domains
 - [ ] Change default admin password
-- [ ] Set up proper database (consider PostgreSQL for production)
-- [ ] Configure reverse proxy (Nginx/Apache)
-- [ ] Enable HTTPS/SSL certificates
-- [ ] Set up proper file permissions for `uploads/` and `data/` directories
+- [ ] Configure reverse proxy (Nginx)
+- [ ] Enable HTTPS/SSL
+- [ ] Set file permissions for `uploads/` and `data/`
 - [ ] Configure logging
-- [ ] Set up backup strategy for database
-- [ ] Consider IP whitelisting for admin endpoints
-- [ ] Disable API documentation (`docs_url=None` - already configured)
-- [ ] Set up process manager (systemd, supervisor, PM2)
-- [ ] Configure firewall rules
+- [ ] Set up database backups
+- [ ] Use process manager (systemd/supervisor)
 
-### Nginx Configuration Example
-
+### Nginx Example
 ```nginx
 server {
     listen 80;
     server_name your-domain.com;
-
+    
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
     }
-
-    # Increase upload size limit
+    
     client_max_body_size 5M;
 }
 ```
 
-### Systemd Service Example
-
-Create `/etc/systemd/system/dawud-charity.service`:
-
+### Systemd Service
 ```ini
 [Unit]
 Description=Dawud Charity Hub Backend
@@ -595,38 +293,21 @@ After=network.target
 [Service]
 User=www-data
 WorkingDirectory=/path/to/dawud-charity-backend
-Environment="PATH=/path/to/dawud-charity-backend/venv/bin"
-ExecStart=/path/to/dawud-charity-backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Environment="PATH=/path/to/venv/bin"
+ExecStart=/path/to/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Enable and start:
-```bash
-sudo systemctl enable dawud-charity
-sudo systemctl start dawud-charity
-```
+Enable: `sudo systemctl enable dawud-charity && sudo systemctl start dawud-charity`
 
-## 📝 Notes
+## Notes
 
-- The application automatically creates necessary directories on startup
-- Temporary files are cleaned up on startup
-- Database tables are created automatically on first run
-- WebSocket connections require JWT token authentication
-- All file uploads are validated and sanitized
-- Images are stored with UUID-based filenames for security
-
-## 🤝 Support
-
-For issues, questions, or contributions, please refer to the project repository or contact the development team.
-
-## 📄 License
-
-[Specify your license here]
-
----
-
-**Built with ❤️ for Dawud Charity Hub**
-
+- Database tables auto-created on first run
+- Directories auto-created on startup
+- Temporary files cleaned on startup
+- WebSocket requires JWT token authentication
+- File uploads validated and sanitized
+- Images stored with UUID filenames
