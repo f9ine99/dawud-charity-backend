@@ -1,14 +1,17 @@
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Query, Body, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, func
 import pandas as pd
 from datetime import datetime, timedelta
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import List
 
@@ -86,6 +89,11 @@ app = FastAPI(
     redoc_url=None  # Disable redoc in production for security
 )
 
+# Add session middleware for server-side authentication
+# Use a secure secret key for session management
+SESSION_SECRET = secrets.token_urlsafe(32)
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
+
 # Setup rate limiting
 limiter = setup_rate_limits(app)
 
@@ -105,7 +113,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 # Production domains for Dawud Charity Hub
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "https://kedi.furi-cadaster.com,https://www.kedi.furi-cadaster.com"
+    "https://kedi.furi-cadaster.com,https://www.kedi.furi-cadaster.com,http://localhost:8000,http://localhost:3000"
 ).split(",")
 
 app.add_middleware(
@@ -121,24 +129,49 @@ app.add_middleware(
 # In production, ensure uploads directory exists and has proper permissions
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-# Serve admin interface
+# Serve admin interface - Login page (unprotected)
 @app.get("/admin", response_class=HTMLResponse)
 @app.get("/admin/", response_class=HTMLResponse)
-async def admin_interface():
-    """Serve the admin interface."""
-    admin_file = Path("templates/admin.html")
-    if admin_file.exists():
-        return admin_file.read_text()
-    raise HTTPException(status_code=404, detail="Admin interface not found")
-
-# Mount templates directory for admin assets
-app.mount("/admin/assets", StaticFiles(directory="templates"), name="admin-assets")
+async def admin_login():
+    """Serve the admin login interface."""
+    login_file = Path("templates/login.html")
+    if login_file.exists():
+        return login_file.read_text()
+    raise HTTPException(status_code=404, detail="Login interface not found")
 
 # Security scheme
 security = HTTPBearer()
 
-# Dependency to get current admin user
-async def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(security)):
+# Session-based authentication dependency
+async def get_current_admin(request: Request):
+    """Get current admin user from session."""
+    if "admin_username" not in request.session:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"Location": "/admin"}
+        )
+
+    username = request.session["admin_username"]
+
+    # Verify admin still exists and is active
+    db = SessionLocal()
+    try:
+        admin = db.query(Admin).filter(Admin.username == username).first()
+        if not admin or not admin.is_active:
+            # Clear invalid session
+            request.session.pop("admin_username", None)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid session",
+                headers={"Location": "/admin"}
+            )
+        return username
+    finally:
+        db.close()
+
+# JWT-based authentication (for API endpoints that still use tokens)
+async def get_current_admin_jwt(credentials: HTTPAuthorizationCredentials = Depends(security)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -149,6 +182,31 @@ async def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(
     if username is None:
         raise credentials_exception
     return username
+
+# Serve admin dashboard (protected)
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+async def admin_dashboard(request: Request, current_admin: str = Depends(get_current_admin)):
+    """Serve the admin dashboard interface (requires authentication)."""
+    dashboard_file = Path("templates/dashboard.html")
+    if dashboard_file.exists():
+        # Generate a WebSocket token for real-time updates
+        from datetime import timedelta
+        ws_token = create_access_token(
+            data={"sub": current_admin},
+            expires_delta=timedelta(hours=8)  # 8 hour token for WebSocket
+        )
+        
+        # Read template and inject WebSocket token
+        html_content = dashboard_file.read_text()
+        html_content = html_content.replace(
+            "const WS_TOKEN = null;",
+            f"const WS_TOKEN = '{ws_token}';"
+        )
+        return HTMLResponse(content=html_content)
+    raise HTTPException(status_code=404, detail="Dashboard interface not found")
+
+# Mount templates directory for admin assets
+app.mount("/admin/assets", StaticFiles(directory="templates"), name="admin-assets")
 
 # Public endpoints
 @app.post("/api/submit-donation", response_model=dict)
@@ -240,10 +298,10 @@ async def submit_donation(
     }
 
 # Admin authentication endpoints
-@app.post("/api/admin/login", response_model=Token)
+@app.post("/api/admin/login")
 @limiter.limit("5/minute")  # Max 5 login attempts per minute per IP
 async def login_admin(request: Request, admin_credentials: AdminLogin, db: Session = Depends(get_db)):
-    """Admin login endpoint with rate limiting to prevent brute force attacks."""
+    """Admin login endpoint with rate limiting and session-based authentication."""
     admin = db.query(Admin).filter(Admin.username == admin_credentials.username).first()
     if not admin:
         raise HTTPException(
@@ -263,24 +321,32 @@ async def login_admin(request: Request, admin_credentials: AdminLogin, db: Sessi
             detail="Incorrect username or password"
         )
 
-    access_token = create_access_token(
-        data={"sub": admin.username},
-        expires_delta=timedelta(minutes=30)
-    )
+    # Create session for authenticated admin
+    request.session["admin_username"] = admin.username
+    request.session["login_time"] = datetime.utcnow().isoformat()
 
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {"success": True, "message": "Login successful", "redirect": "/admin/dashboard"}
+
+# Admin logout endpoint
+@app.post("/api/admin/logout")
+async def logout_admin(request: Request):
+    """Admin logout endpoint."""
+    request.session.pop("admin_username", None)
+    request.session.pop("login_time", None)
+    return {"success": True, "message": "Logged out successfully"}
 
 # Password change endpoint
 @app.put("/api/admin/change-password")
 async def change_password(
-    request: dict,
+    request: Request,
+    password_data: dict,
     current_admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """Change admin password."""
-    # Extract parameters from request
-    current_password = request.get('current_password')
-    new_password = request.get('new_password')
+    # Extract parameters from request body
+    current_password = password_data.get('current_password')
+    new_password = password_data.get('new_password')
 
     if not current_password or not new_password:
         raise HTTPException(
@@ -314,6 +380,9 @@ async def change_password(
     admin.hashed_password = get_password_hash(new_password)
     db.commit()
 
+    # Clear session after password change for security
+    request.session.clear()
+
     return {
         "success": True,
         "message": "Password changed successfully"
@@ -322,6 +391,7 @@ async def change_password(
 # Protected admin endpoints
 @app.get("/api/admin/dashboard-stats")
 async def get_dashboard_stats(
+    request: Request,
     current_admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
@@ -365,17 +435,30 @@ async def get_dashboard_stats(
 
 @app.get("/api/admin/submissions")
 async def get_submissions(
+    request: Request,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(100, ge=1, le=999999),
     verified_only: bool = Query(False),
+    search: str = Query(None),
     current_admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
-    """Get all donation submissions with pagination."""
+    """Get all donation submissions with pagination and search."""
     query = db.query(DonationSubmissionModel)
 
     if verified_only:
         query = query.filter(DonationSubmissionModel.is_verified == True)
+    
+    # Apply search filter at database level
+    if search:
+        search_term = f"%{search.lower()}%"
+        query = query.filter(
+            or_(
+                func.lower(DonationSubmissionModel.donor_name).like(search_term),
+                func.lower(DonationSubmissionModel.transaction_reference).like(search_term),
+                func.lower(DonationSubmissionModel.donor_contact).like(search_term)
+            )
+        )
 
     submissions = query.order_by(desc(DonationSubmissionModel.submitted_at)).offset(skip).limit(limit).all()
 
@@ -399,8 +482,23 @@ async def get_submissions(
 
     return result
 
+@app.get("/api/admin/banks")
+async def get_banks(
+    request: Request,
+    current_admin: str = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Get list of available banks for filter dropdown."""
+    try:
+        banks = db.query(DonationSubmissionModel.bank_used).distinct().all()
+        bank_list = [bank.bank_used for bank in banks if bank.bank_used]
+        return sorted(bank_list)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching banks: {str(e)}")
+
 @app.get("/api/admin/submissions/{submission_id}", response_model=DonationSubmission)
 async def get_submission(
+    request: Request,
     submission_id: int,
     current_admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db)
@@ -416,12 +514,21 @@ async def get_submission(
 
 @app.put("/api/admin/submissions/{submission_id}/verify")
 async def verify_submission(
+    request: Request,
     submission_id: int,
-    is_verified: bool = Query(...),
+    verification_data: dict,
     current_admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """Verify or unverify a submission."""
+    # Extract is_verified from request body
+    is_verified = verification_data.get('is_verified')
+    if is_verified is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="is_verified field is required"
+        )
+
     submission = db.query(DonationSubmissionModel).filter(DonationSubmissionModel.id == submission_id).first()
     if not submission:
         raise HTTPException(
@@ -447,9 +554,44 @@ async def verify_submission(
         "message": f"Submission {'verified' if is_verified else 'unverified'} successfully"
     }
 
+# Delete submission endpoint
+@app.delete("/api/admin/delete/{submission_id}")
+async def delete_submission(
+    request: Request,
+    submission_id: int,
+    current_admin: str = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Delete a submission."""
+    submission = db.query(DonationSubmissionModel).filter(DonationSubmissionModel.id == submission_id).first()
+    if not submission:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission not found"
+        )
+
+    # Delete associated image file if exists
+    if submission.proof_image:
+        try:
+            image_path = get_file_path(submission.proof_image)
+            if image_path and os.path.exists(image_path):
+                os.remove(image_path)
+        except Exception as e:
+            print(f"Error deleting image file: {e}")
+
+    # Delete the submission
+    db.delete(submission)
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Submission deleted successfully"
+    }
+
 @app.get("/api/admin/export")
 async def export_submissions(
-    format: str = Query("csv", regex="^(csv|excel)$"),
+    request: Request,
+    format: str = Query("csv", pattern="^(csv|excel)$"),
     verified_only: bool = Query(False),
     current_admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db)
@@ -511,6 +653,7 @@ async def export_submissions(
 # Serve uploaded images securely
 @app.get("/api/admin/images/{image_path:path}")
 async def get_submission_image(
+    request: Request,
     image_path: str,
     current_admin: str = Depends(get_current_admin)
 ):
