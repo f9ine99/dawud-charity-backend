@@ -1,0 +1,20 @@
+# ignoring env file
+env.example
+
+# ignoring venv folder
+venv/
+__pycache__/
+*.pyc
+
+# ignoring IDE specific files
+.vscode/
+.idea/  
+.DS_Store
+
+# ignoring log files
+*.log
+logs/       
+
+# ignoring database files
+data/
+*.db

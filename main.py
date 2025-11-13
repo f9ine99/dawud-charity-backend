@@ -15,6 +15,16 @@ import secrets
 from pathlib import Path
 from typing import List
 
+
+folder_name = "uploads"
+
+# Check if folder exists, if not create it
+if not os.path.exists(folder_name):
+    os.makedirs(folder_name)
+    print(f"Folder '{folder_name}' created successfully.")
+else:
+    print(f"Folder '{folder_name}' already exists. Skipping creation.")
+
 from database import engine, Base, get_db, SessionLocal
 from models import DonationSubmission as DonationSubmissionModel, Admin
 from schemas import (
