@@ -82,6 +82,13 @@
                                     <i class="fas fa-eye"></i>
                                 </button>
                             </div>
+                            <!-- Caps Lock Warning -->
+                            <div id="capslock-warning" class="hidden mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                                <div class="flex items-center">
+                                    <i class="fas fa-exclamation-triangle text-amber-600 mr-2"></i>
+                                    <span class="text-amber-700 text-sm">Caps Lock is ON</span>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Submit Button -->
@@ -110,9 +117,12 @@
     <div id="toast-container"></div>
 
     <script>
+        // Get password input and warning elements
+        const passwordInput = document.getElementById('password');
+        const capslockWarning = document.getElementById('capslock-warning');
+
         // Password toggle functionality
         document.getElementById('toggle-password').addEventListener('click', function() {
-            const passwordInput = document.getElementById('password');
             const icon = this.querySelector('i');
 
             if (passwordInput.type === 'password') {
@@ -122,6 +132,117 @@
                 passwordInput.type = 'password';
                 icon.className = 'fas fa-eye';
             }
+        });
+
+        // Caps Lock detection - real-time state checking
+        function updateCapsLockWarning(e) {
+            // Always check the actual Caps Lock state using getModifierState from the event
+            if (e && e.getModifierState) {
+                const isCapsLockOn = e.getModifierState('CapsLock');
+                if (isCapsLockOn) {
+                    capslockWarning.classList.remove('hidden');
+                } else {
+                    capslockWarning.classList.add('hidden');
+                }
+                return;
+            }
+
+            // Fallback method: detect by character case (for older browsers)
+            if (e && (e.keyCode || e.which)) {
+                const char = String.fromCharCode(e.keyCode || e.which);
+                if (char.length === 1 && /[a-zA-Z]/.test(char)) {
+                    const isUpperCase = char === char.toUpperCase() && char !== char.toLowerCase();
+                    const isLowerCase = char === char.toLowerCase() && char !== char.toUpperCase();
+                    
+                    if (isUpperCase || isLowerCase) {
+                        const shiftPressed = e.shiftKey;
+                        const capsLockOn = (isUpperCase && !shiftPressed) || (isLowerCase && shiftPressed);
+                        
+                        if (capsLockOn) {
+                            capslockWarning.classList.remove('hidden');
+                        } else {
+                            capslockWarning.classList.add('hidden');
+                        }
+                    }
+                }
+            }
+        }
+
+        // Track last known Caps Lock state
+        let lastCapsLockState = false;
+
+        // Check Caps Lock state on every keydown event
+        passwordInput.addEventListener('keydown', function(e) {
+            // If Caps Lock key itself is pressed, the state will toggle
+            if (e.key === 'CapsLock' || e.keyCode === 20) {
+                // The state has toggled, so flip our tracked state
+                lastCapsLockState = !lastCapsLockState;
+                // Update warning immediately based on new state
+                if (lastCapsLockState) {
+                    capslockWarning.classList.remove('hidden');
+                } else {
+                    capslockWarning.classList.add('hidden');
+                }
+                // Also verify on next real keypress
+                setTimeout(() => {
+                    const verifyState = function(nextEvent) {
+                        if (nextEvent.getModifierState) {
+                            const actualState = nextEvent.getModifierState('CapsLock');
+                            lastCapsLockState = actualState;
+                            updateCapsLockWarning(nextEvent);
+                        }
+                        passwordInput.removeEventListener('keydown', verifyState);
+                    };
+                    passwordInput.addEventListener('keydown', verifyState, { once: true });
+                }, 10);
+            } else {
+                // For all other keys, check state immediately from the event
+                if (e.getModifierState) {
+                    lastCapsLockState = e.getModifierState('CapsLock');
+                }
+                updateCapsLockWarning(e);
+            }
+        });
+
+        // Check on keyup as well for immediate feedback when typing
+        passwordInput.addEventListener('keyup', function(e) {
+            // Always check the state on keyup (except for Caps Lock key itself which we handle in keydown)
+            if (e.key !== 'CapsLock' && e.keyCode !== 20) {
+                if (e.getModifierState) {
+                    lastCapsLockState = e.getModifierState('CapsLock');
+                }
+                updateCapsLockWarning(e);
+            }
+        });
+
+        // Also listen for keypress to catch all typing events
+        passwordInput.addEventListener('keypress', function(e) {
+            updateCapsLockWarning(e);
+        });
+
+        // Check state on mousedown (when user clicks in the field)
+        passwordInput.addEventListener('mousedown', function(e) {
+            // Create a synthetic event to check Caps Lock state
+            const syntheticEvent = {
+                getModifierState: function(mod) {
+                    if (mod === 'CapsLock' && e.getModifierState) {
+                        return e.getModifierState('CapsLock');
+                    }
+                    return false;
+                }
+            };
+            updateCapsLockWarning(syntheticEvent);
+        });
+
+        // Initialize state when field gains focus
+        passwordInput.addEventListener('focus', function() {
+            // Reset tracked state - will be updated on first keystroke
+            // We can't check without an event, but the first keypress will set it correctly
+        });
+
+        passwordInput.addEventListener('blur', function() {
+            // Hide warning when field loses focus
+            capslockWarning.classList.add('hidden');
         });
 
         // Login form handling

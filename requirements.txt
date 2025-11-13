@@ -13,3 +13,5 @@ openpyxl
 bcrypt
 slowapi
 email-validator
+itsdangerous
+websockets
